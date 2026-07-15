@@ -67,6 +67,84 @@
   2. 检查证书/双因子认证步骤是否正确。  
 - 上报条件：服务端故障或证书账号问题。上报时附客户端错误日志和截图。
 
+### 6.x 电脑蓝屏 / 内核崩溃（BSOD）处理流程
+
+- 现象：Windows 出现蓝屏（带 STOP code 或 BUGCHECK），或系统重启后提示“系统发生问题需重启”等内核崩溃表现；macOS 出现 kernel panic（屏幕黑/重启并显示 panic 信息）。
+- 先做（尽量在 5 分钟内完成现场记录）：
+  1. 记录时间点与重现步骤：记录发生时间、正在运行的程序、是否插有外接设备、是否近期安装了新驱动或补丁。拍照/截图蓝屏上的 STOP code/错误信息（手机拍照最稳妥）。
+  2. 不要立即清空或删除任何 Dump/日志文件，保留 C:\Windows\Minidump 和 %SystemRoot%\MEMORY.DMP 文件。
+  3. 尝试重启并进入安全模式（按 F8 或在恢复环境选择“安全模式”）。观察是否能稳定启动并复现蓝屏。
+  4. 若系统无法启动或每次启动均蓝屏，做以下收集（见“信息收集”）。
+
+- 现场快速检查命令（在管理员 PowerShell / CMD 中）：
+  - 查看 minidump：dir C:\Windows\Minidump
+  - 导出系统信息：systeminfo > C:\Temp\systeminfo.txt
+  - 列出驱动：driverquery /v > C:\Temp\drivers.txt
+  - 检查 SFC：sfc /scannow
+  - DISM 修复（Windows 10/11）：DISM /Online /Cleanup-Image /RestoreHealth
+  - 检查磁盘：chkdsk C: /f /r（注意需要重启）
+  - 内存检测：运行 Windows 内存诊断（mdsched.exe）或安排 memtest86
+  - 查看事件日志（按时间区间）：事件查看器 → Windows 日志 → 系统，过滤 Critical/Error，与蓝屏时间点匹配
+
+- Dump / 日志收集（上报与分析必备）：
+  - 收集路径与文件：
+    - 小型内存转储：C:\Windows\Minidump\*.dmp
+    - 完整/内核转储（如配置）：%SystemRoot%\MEMORY.DMP
+    - 事件查看器 System log 的相关条目（时间窗口 ±5 分钟）
+    - systeminfo、driverquery 输出、最近安装的驱动/软件清单（过去 7 天）
+    - BIOS/UEFI 版本、固件更新历史
+    - 如果有外接硬件（扩展坞、USB 设备、外接显卡等），列出并尽量复现/断开测试结果
+  - 工具建议：
+    - WinDbg（Microsoft Debugging Tools）+ 符号：使用 !analyze -v 分析 dump（符号路径 SRV*c:\symbols*https://msdl.microsoft.com/download/symbols）
+    - NirSoft BlueScreenView / WhoCrashed（快速定位可疑驱动）
+    - memtest86（内存稳定性测试）
+
+- 常见 STOP CODE 指引（示例）：
+  - IRQL_NOT_LESS_OR_EQUAL（通常与驱动或硬件中断相关）
+  - MEMORY_MANAGEMENT / PFN_LIST_CORRUPT（可能为内存/驱动/磁盘问题）
+  - PAGE_FAULT_IN_NONPAGED_AREA（内存/驱动/反病毒冲突）
+  - DRIVER_IRQL_NOT_LESS_OR_EQUAL（特定驱动）
+  - KMODE_EXCEPTION_NOT_HANDLED（驱动或内核模块异常）
+  - SYSTEM_SERVICE_EXCEPTION（图形驱动/系统服务异常）
+  - （若 STOP code 指向具体驱动 *.sys，优先考虑回滚/更新该驱动）
+
+- 排查建议顺序（从低成本到高侵入）：
+  1. 记录并保留 Dump 与日志；拍照蓝屏信息。
+  2. 断开近期新增外设（USB/扩展坞/打印机/外置显卡）并重启验证。
+  3. 进入安全模式，若安全模式稳定，排查第三方驱动/启动项（msconfig/任务管理器 → 启动）。
+  4. 回滚或更新显卡/网卡/存储控制器等关键驱动；若近期有 Windows 更新或驱动更新，尝试回滚。
+  5. 运行 SFC / DISM / chkdsk / 内存检测（memtest）；根据检测结果决定是否更换内存条或硬盘进一步检测。
+  6. 若怀疑驱动，使用 Driver Verifier（谨慎，可能触发蓝屏以捕获问题），并收集新的 dump 交 L2 分析。
+  7. 如怀疑硬件（内存错误、硬盘故障、主板异常），联系硬件支持并记录保修信息，按资产流程更换或 RMA。
+
+- 上报条件（需升级到 L2 / 硬件 / 安全团队）：
+  - 连续多次蓝屏或每次启动均蓝屏且无法进入系统。
+  - Dump 分析显示内存/硬件错误（memtest/SMART 报告有错误）。
+  - Dump 指向第三方驱动且现场无法回滚或更新（需厂商支持）。
+  - 发生在多个用户/同一硬件型号或批次（可能为批量硬件故障）。
+  - 可疑安全事件（dump 中出现异常模块/未知驱动或与已知恶意模块相关）。
+
+- 上报时必须提供的内容（模板字段）：
+  - 报告标题：BSOD - {主诉简短描述} - {主机名} - {日期时间}
+  - ITSM 工单号：
+  - 发生时间：
+  - 主机信息：主机名、资产编号、序列号、OS 版本与补丁号（从 systeminfo）
+  - 停机表现：STOP code（如 0x0000001E / MEMORY_MANAGEMENT）、错误文字描述、是否重现
+  - Dump 路径与文件（附下载/压缩）：C:\Windows\Minidump\xxx.dmp、%SystemRoot%\MEMORY.DMP
+  - 近期变更：最近 7 天内安装的驱动/软件/Windows 更新清单
+  - 已做检查项与结果：SFC/DISM/chkdsk、memtest、磁盘 SMART、是否能进入安全模式
+  - 是否为现场可修复（断开外设/回滚驱动可恢复）或需更换硬件
+  - 联系人与联系电话、优先级与影响范围（单机/部门/多人）
+  - 附件：蓝屏照片、事件查看器截图、driverquery/systeminfo 输出、memtest/SMART 报告
+
+- macOS kernel panic 简要处理（如需支持 mac）：
+  - 记录 panic 信息（屏幕上会出现 panic 内容），重启并在 Console.app 中导出 panic logs（/Library/Logs/DiagnosticReports/）。
+  - 断开外设并重启；如持续 panic，启动至安全模式（按 Shift）或恢复模式排查。
+  - 常见原因：第三方内核扩展（kext）、外设驱动、硬件故障（内存/SSD）。
+  - 收集系统信息并上报至 L2/mac 支持。
+
+- 备注与建议：
+  - 尽量保留原始 dump 与日志以便厂商或 L2 使用 WinDbg 深入分析。
 ---
 
 ## 何时上报（Escalate）
